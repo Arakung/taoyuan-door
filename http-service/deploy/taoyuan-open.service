@@ -1,0 +1,41 @@
+[Unit]
+Description=Taoyuan Quick Open (HTTP gateway)
+Documentation=https://github.com/  # 本项目 README
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 改成实际的运行用户与目录
+User=taoyuan
+Group=taoyuan
+WorkingDirectory=/opt/taoyuan
+
+# 默认只监听回环，外部通过 Tailscale / Caddy 反代；若只在可信内网用，可改 0.0.0.0
+Environment=PORT=8787
+Environment=HOST=127.0.0.1
+Environment=TYG_CONFIG=/opt/taoyuan/config.json
+
+ExecStart=/usr/bin/node /opt/taoyuan/serve.mjs
+
+Restart=always
+RestartSec=3
+
+# 沙箱加固：这个服务只需要读配置 + 出网，别的都不给
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=256M
+
+# 日志走 journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

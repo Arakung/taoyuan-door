@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Android APK and extracted binaries (Too large for GitHub / Proprietary)
+*.apk
+*.zip
+dex/
+so/
+
+# Media and stream dumps
+*.h264
+*.mjpeg
+*.bin
+*.sdp
+*.log
+allstrings.txt
+
+# Image frame dumps
+*.jpg
+*.jpeg
+*.png
+
+# Sensitive configurations
+cfg.json
+door_config.json
+http-service/config.json
+http-service/server-config.json
+http-service/token.json
+direct/config.json
+direct/server-config.json
+direct/token.json
+
+
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

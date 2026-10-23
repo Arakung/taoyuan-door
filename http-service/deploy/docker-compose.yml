@@ -1,0 +1,26 @@
+services:
+  taoyuan-open:
+    build:
+      context: ../..
+      dockerfile: http-service/deploy/Dockerfile
+    image: taoyuan-open:latest
+    container_name: taoyuan-open
+    restart: unless-stopped
+    environment:
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      # 也可以把凭据直接放环境变量，就不用挂 config.json：
+      # TYG_PHONE: "13xxxxxxxxx"
+      # TYG_PASSWORD: "***"
+      # TYG_ACCESS_KEY: "换一个长口令"
+    volumes:
+      # 只读挂载，容器内改不了你的凭据
+      - ./config.json:/app/config.json:ro
+    ports:
+      # 关键：只绑本机回环，公网访问不到；对外只通过 Tailscale / 反代暴露
+      - "127.0.0.1:8787:8787"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

@@ -1,0 +1,54 @@
+# QNAP Container Station 专用（不用在 NAS 上装 Node）
+#
+# 用法：
+#   1. 在 QNAP 上建共享文件夹：Container/taoyuan  → 实际路径 /share/Container/taoyuan
+#   2. 把 core.mjs、serve.mjs、config.json 三个文件放进去
+#   3. Container Station → 应用程序 → 创建 → 粘贴本文件内容
+#
+# 关键：TZ 必须是 Asia/Shanghai。容器默认 UTC，而加盐 token 用的是本地时间戳，
+#       差 8 小时会被服务端判为非法请求（表现为登录失败/005）。
+services:
+  taoyuan-open:
+    # ── 镜像地址：换镜像站就改这一行 ────────────────────────────
+    # 格式永远是： <镜像站域名> /library/node:22-alpine
+    # 也就是在官方名 node:22-alpine 前面加「域名/library/」。
+    #
+    # 已填好一个实测可用的（2026-10 实测能取到 manifest）：
+    image: docker.1panel.live/library/node:22-alpine
+    #
+    # 拉不动就按顺序换下面任意一个（同样是实测可达）：
+    #   image: docker.m.daocloud.io/library/node:22-alpine
+    #   image: hub.rat.dev/library/node:22-alpine
+    #
+    # 想回到官方源（需要能访问 Docker Hub）：
+    #   image: node:22-alpine
+    # ────────────────────────────────────────────────────────
+    container_name: taoyuan-open
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node","/app/serve.mjs"]
+    environment:
+      TZ: Asia/Shanghai
+      PORT: "8787"
+      HOST: "0.0.0.0"
+    volumes:
+      # 目录整体只读挂载：代码 + 配置都在里面，容器改不了你的凭据
+      - /share/Container/taoyuan:/app:ro
+    ports:
+      # 家里局域网直连用这个；只走 Tailscale 的话改成 "127.0.0.1:8787:8787"
+      - "8787:8787"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
