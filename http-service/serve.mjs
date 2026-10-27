@@ -24,21 +24,117 @@ import { loadConfig, Taoyuan } from './core.mjs';
 const cfg = loadConfig();
 const svc = new Taoyuan(cfg, (m) => console.log(`[${new Date().toLocaleTimeString('zh-CN')}] ${m}`));
 
-function send(res, status, data, type = 'application/json;charset=UTF-8') {
+function send(res, status, data, type = 'application/json;charset=UTF-8', headers = {}) {
   const body = typeof data === 'string' ? data : JSON.stringify(data);
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+  res.writeHead(status, {
+    'Content-Type': type,
+    'Cache-Control': 'no-store',
+    ...headers,
+  });
   res.end(body);
+}
+
+function getCookie(req, name) {
+  const header = req.headers.cookie;
+  if (!header) return '';
+  const match = header.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function getProvidedKey(req, url) {
+  const auth = req.headers['authorization'];
+  const bearer = auth && auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  return (
+    req.headers['x-access-key'] ??
+    req.headers['x-access-token'] ??
+    (bearer || undefined) ??
+    url.searchParams.get('k') ??
+    url.searchParams.get('access_key') ??
+    getCookie(req, 'tyg_key') ??
+    ''
+  );
 }
 
 function authorized(req, url) {
   if (!cfg.accessKey) return true;
-  const provided =
-    req.headers['x-access-key'] ??
-    req.headers['x-access-token'] ??
-    url.searchParams.get('k') ??
-    url.searchParams.get('access_key') ??
-    '';
-  return provided === cfg.accessKey;
+  return getProvidedKey(req, url) === cfg.accessKey;
+}
+
+function authCookieHeader(req, url) {
+  if (!cfg.accessKey) return {};
+  const paramKey = url.searchParams.get('k') ?? url.searchParams.get('access_key');
+  if (paramKey && paramKey === cfg.accessKey) {
+    return {
+      'Set-Cookie': `tyg_key=${encodeURIComponent(cfg.accessKey)}; Path=/; SameSite=Lax; Max-Age=31536000; HttpOnly`,
+    };
+  }
+  return {};
+}
+
+function authPage() {
+  return `<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111418">
+<link rel="icon" href="/icon.png">
+<title>桃园谷 · 门禁验证</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; background:#111418; color:#e8eaed;
+         font:16px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; padding:32px 24px; }
+  .card { width:min(90vw,360px); background:#181c22; border:1px solid #282f3a; border-radius:20px;
+          padding:32px 24px; display:flex; flex-direction:column; gap:20px; box-shadow:0 20px 40px rgba(0,0,0,.5); }
+  h1 { font-size:18px; font-weight:600; margin:0; text-align:center; color:#fff; }
+  p { font-size:13px; color:#8b939e; margin:0; text-align:center; }
+  input { width:100%; padding:14px 16px; background:#111418; border:1px solid #30363d; border-radius:12px;
+          color:#fff; font-size:15px; outline:none; transition:border-color .15s; }
+  input:focus { border-color:#2a6df4; }
+  button { width:100%; padding:13px; background:#2a6df4; color:#fff; border:none; border-radius:12px;
+           font-size:15px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+  button:active { opacity:.85; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #err { font-size:13px; color:#f85149; text-align:center; min-height:18px; }
+</style>
+</head><body>
+<div class="card">
+  <h1>桃园谷 · 门禁验证</h1>
+  <p>服务已启用访问保护，请输入口令进入</p>
+  <form id="f" onsubmit="submitKey(event)">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <input type="password" id="pw" placeholder="访问口令 (accessKey)" autocomplete="current-password" autofocus required>
+      <button type="submit" id="btn">确认进入</button>
+    </div>
+  </form>
+  <div id="err"></div>
+</div>
+<script>
+async function submitKey(e) {
+  if (e) e.preventDefault();
+  const pw = document.getElementById('pw').value.trim();
+  if (!pw) return;
+  const btn = document.getElementById('btn'), err = document.getElementById('err');
+  btn.disabled = true; btn.textContent = '验证中…'; err.textContent = '';
+  try {
+    const res = await fetch('/doors?k=' + encodeURIComponent(pw));
+    if (res.ok) {
+      location.href = '/?k=' + encodeURIComponent(pw);
+    } else {
+      const d = await res.json().catch(() => ({}));
+      err.textContent = d.message || '访问口令不正确';
+      btn.disabled = false; btn.textContent = '确认进入';
+    }
+  } catch (ex) {
+    err.textContent = '网络错误：' + ex.message;
+    btn.disabled = false; btn.textContent = '确认进入';
+  }
+}
+</script>
+</body></html>`;
 }
 
 /* ---------------- 开门记录 ---------------- */
@@ -181,8 +277,8 @@ function sanitizeDoors(d) {
   };
 }
 
-function page() {
-  const k = cfg.accessKey ? `?k=${encodeURIComponent(cfg.accessKey)}` : '';
+function page(userKey = '') {
+  const k = userKey ? `?k=${encodeURIComponent(userKey)}` : '';
   return `<!doctype html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8">
@@ -193,7 +289,7 @@ function page() {
 <meta name="theme-color" content="#111418">
 <link rel="icon" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon.png">
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="/manifest.json${k}">
 <title>开门</title>
 <style>
   :root { color-scheme: dark; }
@@ -201,7 +297,6 @@ function page() {
   body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center;
          justify-content:center; gap:26px; background:#111418; color:#e8eaed;
          font:16px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; padding:32px 24px calc(32px + env(safe-area-inset-bottom)); }
-  h1 { font-size:15px; font-weight:500; letter-spacing:.08em; color:#7c848f; margin:0; text-transform:uppercase; }
   .door { width:min(78vw,320px); aspect-ratio:1; border-radius:50%; border:none; cursor:pointer;
           background:radial-gradient(circle at 35% 30%,#2a6df4,#1240a8); color:#fff;
           font-size:26px; font-weight:600; letter-spacing:.04em; display:flex; flex-direction:column;
@@ -216,7 +311,8 @@ function page() {
   #log { font-size:13px; color:#8b939e; min-height:1.5em; text-align:center; max-width:320px; }
   .doors { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
   .doors a { color:#9fb4d8; text-decoration:none; font-size:13px; border:1px solid #2a3038;
-             border-radius:999px; padding:7px 14px; }
+             border-radius:999px; padding:7px 14px; transition:border-color .15s, background .15s; }
+  .doors a:active { background:rgba(42,109,244,.15); border-color:#2a6df4; }
   #hist { width:min(78vw,320px); font-size:12px; color:#5d6570; text-align:left; }
   #hist .h { display:flex; justify-content:space-between; gap:10px; padding:5px 2px;
              border-top:1px solid #1c2127; }
@@ -225,7 +321,6 @@ function page() {
   #hist .t { flex:none; font-variant-numeric:tabular-nums; }
 </style>
 </head><body>
-<h1 id="title">桃园谷</h1>
 <button class="door" id="btn">开门<small id="sub">轻触</small></button>
 <div id="log"></div>
 <div class="doors" id="doors"></div>
@@ -236,8 +331,11 @@ const btn = document.getElementById('btn'), log = document.getElementById('log')
 let timer;
 const two = n => String(n).padStart(2, '0');
 function loadHist(){
-  fetch('/history' + K).then(r => r.json()).then(d => {
-    if (!d.items || !d.items.length) return;
+  fetch('/history' + K).then(r => {
+    if (r.status === 401) { location.reload(); return; }
+    return r.json();
+  }).then(d => {
+    if (!d || !d.items || !d.items.length) return;
     document.getElementById('hist').innerHTML = d.items.slice(0, 4).map(x => {
       const dt = new Date(x.t);
       const tm = two(dt.getHours()) + ':' + two(dt.getMinutes());
@@ -250,21 +348,32 @@ function loadHist(){
 async function load(){
   try {
     const r = await fetch('/doors' + K);
+    if (r.status === 401) { location.reload(); return; }
     const d = await r.json();
     if (!d.room) throw new Error(d.message || '读取失败');
-    document.getElementById('title').textContent = d.room.address;
     document.getElementById('doors').innerHTML =
-      d.doors.map(x => '<a href="/open/' + x.index + K.replace('?','&') + '">' + x.name + '</a>').join('');
+      d.doors.map(x => '<a href="/open/' + encodeURIComponent(x.index) + K + '" onclick="return clickDoor(event, \\'' + x.index + '\\')">' + x.name + '</a>').join('');
   } catch (e) { log.textContent = e.message; }
 }
-async function open(){
+function clickDoor(e, idx) {
+  if (e) e.preventDefault();
+  open(idx);
+  return false;
+}
+async function open(door){
   btn.className = 'door busy'; sub.textContent = '连接中'; log.textContent = '';
   try {
-    const r = await fetch('/open' + K, { cache: 'no-store' });
+    const ep = door ? ('/open/' + encodeURIComponent(door) + K) : ('/open' + K);
+    const r = await fetch(ep, { cache: 'no-store' });
+    if (r.status === 401) {
+      btn.className = 'door fail'; sub.textContent = '口令失效'; log.textContent = '口令已失效，请重新验证';
+      setTimeout(() => location.reload(), 1500);
+      return;
+    }
     const d = await r.json();
     if (d.ok) {
       btn.className = 'door ok'; sub.textContent = d.deduped ? '刚开过' : '已开';
-      log.textContent = d.door + ' · ' + (d.ms || 0) + 'ms';
+      log.textContent = (d.door || '门口机') + ' · ' + (d.ms || 0) + 'ms';
       if (navigator.vibrate) navigator.vibrate(35);
     } else {
       btn.className = 'door fail'; sub.textContent = '失败';
@@ -277,7 +386,7 @@ async function open(){
   timer = setTimeout(() => { btn.className = 'door'; sub.textContent = '轻触'; }, 5000);
   loadHist();  // 开完刷新最近记录
 }
-btn.addEventListener('click', open);
+btn.addEventListener('click', () => open());
 load();
 loadHist();
 </script>
@@ -298,15 +407,20 @@ const server = http.createServer(async (req, res) => {
       return res.end(ICON);
     }
     if (p === '/manifest.json') {
+      const isAuth = authorized(req, url);
+      const manifestKey = isAuth && cfg.accessKey ? `?k=${encodeURIComponent(cfg.accessKey)}` : '';
       return send(res, 200, {
-        name: '开门', short_name: '开门', start_url: `/${cfg.accessKey ? `?k=${encodeURIComponent(cfg.accessKey)}` : ''}`,
+        name: '开门', short_name: '开门', start_url: `/${manifestKey}`,
         display: 'standalone', background_color: '#111418', theme_color: '#111418',
         icons: [{ src: '/icon.png', sizes: '180x180', type: 'image/png' }],
       }, 'application/manifest+json');
     }
     if (p === '/' || p === '/index.html') {
-      if (!authorized(req, url)) return send(res, 401, page(), 'text/html;charset=UTF-8');
-      return send(res, 200, page(), 'text/html;charset=UTF-8');
+      if (!authorized(req, url)) {
+        return send(res, 401, authPage(), 'text/html;charset=UTF-8');
+      }
+      const providedKey = url.searchParams.get('k') ?? url.searchParams.get('access_key') ?? '';
+      return send(res, 200, page(providedKey), 'text/html;charset=UTF-8', authCookieHeader(req, url));
     }
     if (!authorized(req, url)) {
       return send(res, 401, { ok: false, message: '访问口令不正确' });
